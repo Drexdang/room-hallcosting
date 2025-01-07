@@ -5,20 +5,30 @@ import pandas as pd
 
 # Function to calculate daily depreciation
 def calculate_depreciation(asset_cost, lifespan):
+    """Calculates daily depreciation."""
     days_in_year = 365
     return asset_cost / (lifespan * days_in_year) if lifespan > 0 else 0
 
-# Function to calculate total cost for room/hall
-def calculate_total_cost(utility_cost, maintenance_cost, staffing_cost, consumable_cost, marketing_cost, daily_depreciation, number_of_days):
-    return (utility_cost + maintenance_cost + staffing_cost + consumable_cost + marketing_cost + daily_depreciation * number_of_days)
+# Function to calculate total unit cost
+def calculate_unit_cost(utility_cost, maintenance_cost, staffing_cost, consumable_cost, marketing_cost, daily_depreciation):
+    """Calculates total unit cost per day."""
+    return utility_cost + maintenance_cost + staffing_cost + consumable_cost + marketing_cost + daily_depreciation
+
+# Function to calculate total costs, revenue, and profit
+def calculate_financials(selling_rate, unit_cost, number_of_days, number_of_people):
+    """Calculates total cost, total revenue, and profit margin."""
+    total_cost = unit_cost * number_of_days * number_of_people
+    total_revenue = selling_rate * number_of_days * number_of_people
+    profit_margin = total_revenue - total_cost
+    return total_cost, total_revenue, profit_margin
 
 # Connect to SQLite database
-conn = sqlite3.connect('sale_data.db', check_same_thread=False)
+conn = sqlite3.connect('sale_dat.db', check_same_thread=False)
 c = conn.cursor()
 
 # Create tables if they don't exist
 c.execute(''' 
-    CREATE TABLE IF NOT EXISTS sales (
+    CREATE TABLE IF NOT EXISTS sale (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         date TEXT,
         day_of_week TEXT,
@@ -28,11 +38,14 @@ c.execute('''
         number_of_days INTEGER,
         number_of_people INTEGER,
         selling_rate REAL,
+        total_unit_cost REAL,
         total_cost REAL,
+        total_revenue REAL,
         profit_margin REAL,
         status TEXT
     )
 ''')
+
 c.execute(''' 
     CREATE TABLE IF NOT EXISTS costs (
         name TEXT PRIMARY KEY,
@@ -114,112 +127,130 @@ if option == "📊 Profitability Calculator":
         item_name = st.selectbox("Select Room", list(room_costs.keys()))
         selected_costs = room_costs[item_name]
 
-    daily_depreciation = calculate_depreciation(selected_costs["asset_cost"], selected_costs["lifespan"])
-    number_of_days = st.number_input("Number of Days", min_value=1, step=1)
-
-    total_cost = calculate_total_cost(
-        selected_costs["utility_cost"], selected_costs["maintenance_cost"], selected_costs["staffing_cost"],
-        selected_costs["consumable_cost"], selected_costs["marketing_cost"], daily_depreciation, number_of_days
-    )
-    st.write(f"Total Cost: N{total_cost:.2f}")
-
-    selling_rate = st.number_input("Enter Selling Rate (per day)", min_value=0.0, step=100.0)
-    
-    if selling_rate > 0:
-        total_revenue = selling_rate * number_of_days
-        profit_margin = ((total_revenue - total_cost) / total_revenue) * 100
-        
-        # Debugging: Show calculated profit margin and revenue for verification
-        st.write(f"Total Revenue: N{total_revenue:.2f}")
-        st.write(f"Profit Margin: {profit_margin:.2f}%")
-        
-        # Determine if the sale is profitable based on the 30% threshold
-        if profit_margin > 70:
-            status = "Profitable"
-        else:
-            status = "Not Profitable"
-    else:
-        profit_margin, status = 0, "Selling rate must be greater than 0!"
-    
-    st.write(f"Profit Margin: {profit_margin:.2f}%")
-    st.write(f"Status: {status}")
-
+    # Add the Customer Name input field
     customer_name = st.text_input("Enter Customer Name")
-    number_of_people = st.number_input("Number of People", min_value=1)
 
-    if st.button("Record Sale"):
-        if customer_name:
-            c.execute('''INSERT INTO sales (date, day_of_week, customer_name, category, room_or_hall_name, number_of_days, number_of_people, selling_rate, total_cost, profit_margin, status) 
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                      (datetime.now().strftime("%Y-%m-%d"), datetime.now().strftime("%A"), customer_name,
-                       category, item_name, number_of_days, number_of_people, selling_rate, total_cost, profit_margin, status))
+    # Calculate depreciation, unit cost, and financials
+    daily_depreciation = calculate_depreciation(selected_costs["asset_cost"], selected_costs["lifespan"])
+    unit_cost = calculate_unit_cost(
+        selected_costs["utility_cost"], selected_costs["maintenance_cost"], selected_costs["staffing_cost"],
+        selected_costs["consumable_cost"], selected_costs["marketing_cost"], daily_depreciation
+    )
+
+    number_of_days = st.number_input("Number of Days", min_value=1, step=1)
+    number_of_people = st.number_input("Number of People", min_value=1, step=1)
+    selling_rate = st.number_input("Enter Selling Rate (per day)", min_value=0.0, step=100.0)
+
+    if selling_rate > 0:
+        total_cost, total_revenue, profit_margin = calculate_financials(selling_rate, unit_cost, number_of_days, number_of_people)
+
+        st.write(f"**Unit Cost per Day:** N{unit_cost:.2f}")
+        st.write(f"**Total Cost:** N{total_cost:.2f}")
+        st.write(f"**Total Revenue:** N{total_revenue:.2f}")
+        st.write(f"**Profit Margin:** N{profit_margin:.2f}")
+
+        # Status check for profitability
+        status = "Profitable" if profit_margin / total_revenue > 0.7 else "Not Profitable"
+        st.write(f"**Status:** {status}")
+
+        # Save to the database
+        if st.button("Save Record"):
+            today = datetime.now().strftime("%Y-%m-%d")
+            day_of_week = datetime.now().strftime("%A")
+            c.execute('''INSERT INTO sale (date, day_of_week, customer_name, category, room_or_hall_name, 
+                          number_of_days, number_of_people, selling_rate, total_unit_cost, total_cost, total_revenue, 
+                          profit_margin, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', 
+                      (today, day_of_week, customer_name, category, item_name, number_of_days, number_of_people, 
+                       selling_rate, unit_cost, total_cost, total_revenue, profit_margin, status))
             conn.commit()
-            st.success("Sale recorded successfully!")
-        else:
-            st.error("Customer name is required.")
+            st.success("Record saved successfully!")
 
 elif option == "📂 View Database":
-    st.header("Sales Database")
-    c.execute("SELECT * FROM sales")
-    rows = c.fetchall()
-    df = pd.DataFrame(rows, columns=["ID", "Date", "Day", "Customer Name", "Category", "Room/Hall", "Days", "People", "Selling Rate", "Total Cost", "Profit Margin", "Status"])
-    st.write(df)
+    st.header("Database Records")
+    sales_df = pd.read_sql_query("SELECT * FROM sale", conn)
+    st.dataframe(sales_df)
 
 elif option == "🔧 Update Costs":
     st.header("Update Costs")
-    c.execute("SELECT DISTINCT category FROM costs")
-    categories = [row[0] for row in c.fetchall()]
-    update_category = st.selectbox("Select Category to Update", categories)
-
-    c.execute("SELECT name FROM costs WHERE category = ?", (update_category,))
-    items = [row[0] for row in c.fetchall()]
-    selected_item = st.selectbox(f"Select {update_category} to Update", items)
-
-    c.execute("SELECT * FROM costs WHERE name = ?", (selected_item,))
-    item_data = c.fetchone()
+    costs_df = pd.read_sql_query("SELECT * FROM costs", conn)
+    st.dataframe(costs_df)
     
-    utility_cost = st.number_input("Utility Cost", value=item_data[2])
-    maintenance_cost = st.number_input("Maintenance Cost", value=item_data[3])
-    staffing_cost = st.number_input("Staffing Cost", value=item_data[4])
-    consumable_cost = st.number_input("Consumable Cost", value=item_data[5])
-    marketing_cost = st.number_input("Marketing Cost", value=item_data[6])
-    asset_cost = st.number_input("Asset Cost", value=item_data[7])
-    lifespan = st.number_input("Lifespan (years)", value=item_data[8])
+    with st.form("update_costs_form"):
+        name = st.selectbox("Select Item to Update", costs_df["name"].tolist())
+        category = st.text_input("Category", value=costs_df[costs_df["name"] == name]["category"].values[0])
+        utility_cost = st.number_input("Utility Cost", min_value=0.0, value=float(costs_df[costs_df["name"] == name]["utility_cost"].values[0]))
+        maintenance_cost = st.number_input("Maintenance Cost", min_value=0.0, value=float(costs_df[costs_df["name"] == name]["maintenance_cost"].values[0]))
+        staffing_cost = st.number_input("Staffing Cost", min_value=0.0, value=float(costs_df[costs_df["name"] == name]["staffing_cost"].values[0]))
+        consumable_cost = st.number_input("Consumable Cost", min_value=0.0, value=float(costs_df[costs_df["name"] == name]["consumable_cost"].values[0]))
+        marketing_cost = st.number_input("Marketing Cost", min_value=0.0, value=float(costs_df[costs_df["name"] == name]["marketing_cost"].values[0]))
+        asset_cost = st.number_input("Asset Cost", min_value=0.0, value=float(costs_df[costs_df["name"] == name]["asset_cost"].values[0]))
+        lifespan = st.number_input("Lifespan (in years)", min_value=1, value=int(costs_df[costs_df["name"] == name]["lifespan"].values[0]))
 
-    if st.button("Update Costs"):
-        c.execute('''UPDATE costs SET utility_cost = ?, maintenance_cost = ?, staffing_cost = ?, consumable_cost = ?, marketing_cost = ?, asset_cost = ?, lifespan = ? WHERE name = ?''',
-                  (utility_cost, maintenance_cost, staffing_cost, consumable_cost, marketing_cost, asset_cost, lifespan, selected_item))
-        conn.commit()
-        st.success(f"Updated costs for {selected_item}")
+        submitted = st.form_submit_button("Update")
+        if submitted:
+            c.execute('''UPDATE costs SET category=?, utility_cost=?, maintenance_cost=?, staffing_cost=?, consumable_cost=?, marketing_cost=?, asset_cost=?, lifespan=? WHERE name=?''', 
+                      (category, utility_cost, maintenance_cost, staffing_cost, consumable_cost, marketing_cost, asset_cost, lifespan, name))
+            conn.commit()
+            st.success("Costs updated successfully!")
 
 elif option == "✏️ Edit Sales Records":
     st.header("Edit Sales Records")
-    record_id = st.number_input("Enter Record ID to Edit", min_value=1)
-    if st.button("Load Record"):
-        c.execute("SELECT * FROM sales WHERE id = ?", (record_id,))
-        record = c.fetchone()
-        if record:
-            new_name = st.text_input("Customer Name", value=record[3])
-            new_selling_rate = st.number_input("Selling Rate", value=record[8])
-            if st.button("Update Record"):
-                c.execute("UPDATE sales SET customer_name = ?, selling_rate = ? WHERE id = ?", (new_name, new_selling_rate, record_id))
+
+    # Begin the form
+    with st.form(key='edit_sales_form'):
+        # Fetch all records from the sales table
+        sale_dat = pd.read_sql_query("SELECT * FROM sale", conn)
+        
+        # Select a sales record ID
+        sale_id = st.selectbox("Select Record to Edit", sale_dat['id'].tolist())
+
+        # Fetch the record based on the selected sales ID
+        record = sale_dat[sale_dat['id'] == sale_id]
+
+        if not record.empty:
+            # Display the information for editing
+            new_customer_name = st.text_input("Customer Name", value=record['customer_name'].values[0])
+            new_category = st.selectbox("Category", ["Hall", "Room"], index=["Hall", "Room"].index(record['category'].values[0]))
+            new_room_hall_name = st.selectbox("Room/Hall Name", sale_dat['room_or_hall_name'].unique().tolist(), index=list(sale_dat['room_or_hall_name'].unique()).index(record['room_or_hall_name'].values[0]))
+            new_selling_rate = st.number_input("Selling Rate", value=record['selling_rate'].values[0], min_value=0.0)
+
+            # Submit the form to save changes
+            submit_edit = st.form_submit_button("Save Changes")
+            if submit_edit:
+                # Update the record in the database
+                c.execute('''UPDATE sale SET customer_name=?, category=?, room_or_hall_name=?, selling_rate=? WHERE id=?''', 
+                          (new_customer_name, new_category, new_room_hall_name, new_selling_rate, sale_id))
                 conn.commit()
-                st.success("Record updated successfully!")
+                st.success("Sales record updated successfully!")
         else:
-            st.error("Record not found.")
+            st.error("No record found for the selected ID.")
 
 elif option == "🔍 Search Database":
-    st.header("Search Sales Records")
-    search_date = st.date_input("Select Date")
-    search_name = st.text_input("Enter Customer Name")
-    if st.button("Search"):
-        search_query = "SELECT * FROM sales WHERE date = ? OR customer_name = ?"
-        c.execute(search_query, (search_date.strftime("%Y-%m-%d"), search_name))
-        search_results = c.fetchall()
-        if search_results:
-            st.write(pd.DataFrame(search_results, columns=["ID", "Date", "Day", "Customer Name", "Category", "Room/Hall", "Days", "People", "Selling Rate", "Total Cost", "Profit Margin", "Status"]))
-        else:
-            st.error("No records found.")
+    st.header("Search Database")
 
-# Close database connection
-conn.close()
+    # Search by customer name or room/hall name
+    search_query = st.text_input("Enter your search query")
+    if search_query:
+        search_result = pd.read_sql_query(f"SELECT * FROM sale WHERE customer_name LIKE '%{search_query}%' OR room_or_hall_name LIKE '%{search_query}%'", conn)
+        st.dataframe(search_result)
+
+    # Search by date range
+    st.subheader("Search by Date Range")
+    start_date = st.date_input("Start Date", datetime(2024, 1, 1))  # Set default start date
+    end_date = st.date_input("End Date", datetime.today())  # Set default end date as today
+
+    if start_date and end_date:
+        # Ensure that end date is not before start date
+        if end_date >= start_date:
+            start_date_str = start_date.strftime("%Y-%m-%d")
+            end_date_str = end_date.strftime("%Y-%m-%d")
+            date_range_query = f"SELECT * FROM sale WHERE date BETWEEN '{start_date_str}' AND '{end_date_str}'"
+            date_search_result = pd.read_sql_query(date_range_query, conn)
+            if not date_search_result.empty:
+                st.dataframe(date_search_result)
+            else:
+                st.warning("No records found for the selected date range.")
+        else:
+            st.error("End date must be greater than or equal to the start date.")
+    else:
+        st.warning("Please select both start and end dates.")
